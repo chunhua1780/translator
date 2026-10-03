@@ -1,0 +1,5 @@
+anthropic>=1.11,<2
+fastapi>=0.142,<1
+pymupdf>=1.28,<2
+python-multipart>=0.0.20
+uvicorn>=0.38

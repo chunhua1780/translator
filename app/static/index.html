@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF 说人话翻译</title>
+<style>
+  :root { --bg:#f6f6f4; --card:#fff; --text:#1d1d1f; --muted:#6b6b70; --line:#e2e2e0; --accent:#c8102e; --ok:#1a7f37; --warn:#b35900; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161617; --card:#1f1f21; --text:#f2f2f2; --muted:#a0a0a6; --line:#333336; --accent:#ff4d5e; --ok:#4cc26a; --warn:#ffa24d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font: 15px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  label { display:block; font-weight:600; margin: 12px 0 6px; }
+  input[type=file], select, input[type=number] { width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font-size:15px; }
+  .row { display:flex; gap:12px; flex-wrap: wrap; }
+  .row > div { flex:1; min-width: 140px; }
+  button { background: var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 18px; font-size:15px; cursor:pointer; margin-top:16px; }
+  button.secondary { background: transparent; color: var(--text); border:1px solid var(--line); padding:6px 12px; margin:0; font-size:14px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .bar { height:8px; background: var(--line); border-radius:4px; overflow:hidden; margin: 8px 0; }
+  .bar > div { height:100%; background: var(--accent); transition: width .4s; }
+  .job h3 { margin:0; font-size:16px; word-break: break-all; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .actions { display:flex; gap:8px; margin-top:8px; flex-wrap: wrap; align-items:center; }
+  .state-done { color: var(--ok); } .state-failed { color: var(--accent); } .warn { color: var(--warn); font-size:13px; }
+  a.dl { color: var(--accent); font-weight:600; }
+  #notice { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PDF 说人话翻译</h1>
+  <p class="sub">上传手册，后台逐页改写成一看就懂的中文或英文，保留原来的排版。</p>
+
+  <div class="card warn" id="notice"></div>
+
+  <form class="card" id="form">
+    <label for="file">PDF 文件</label>
+    <input type="file" id="file" accept="application/pdf,.pdf" required>
+    <label for="lang">输出语言</label>
+    <select id="lang">
+      <option value="zh">中文（说人话版）</option>
+      <option value="en">English (plain language)</option>
+    </select>
+    <div class="row">
+      <div><label for="first">从第几页（可不填）</label><input type="number" id="first" min="1"></div>
+      <div><label for="last">到第几页（可不填）</label><input type="number" id="last" min="1"></div>
+    </div>
+    <button type="submit" id="go">上传并开始翻译</button>
+    <div class="bar" id="upbar" style="display:none"><div style="width:0"></div></div>
+    <div class="meta" id="uptext"></div>
+  </form>
+
+  <div id="jobs"></div>
+</main>
+<script>
+const STATE = { uploading:"上传中", queued:"排队中", running:"翻译中", assembling:"拼装 PDF 中", done:"完成", failed:"失败", cancelled:"已取消" };
+const LANG = { zh:"中文", en:"English" };
+
+async function health() {
+  try {
+    const h = await (await fetch("/api/health")).json();
+    const n = document.getElementById("notice");
+    if (h.mode === "mock") { n.textContent = "当前是测试模式：不会调用 Claude，只在每段文字前加“【测试】”，用来检查排版。"; n.style.display = "block"; }
+    else if (!h.api_key_configured) { n.textContent = "还没有配置 ANTHROPIC_API_KEY，翻译会失败。请在 .env 文件里填好后重启。"; n.style.display = "block"; }
+  } catch (e) {}
+}
+
+document.getElementById("form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const f = document.getElementById("file").files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("file", f);
+  fd.append("target_lang", document.getElementById("lang").value);
+  const first = document.getElementById("first").value, last = document.getElementById("last").value;
+  if (first) fd.append("first_page", first);
+  if (last) fd.append("last_page", last);
+  const xhr = new XMLHttpRequest();
+  const bar = document.getElementById("upbar"), txt = document.getElementById("uptext"), btn = document.getElementById("go");
+  bar.style.display = "block"; btn.disabled = true;
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    const p = Math.round(e.loaded / e.total * 100);
+    bar.firstElementChild.style.width = p + "%";
+    txt.textContent = `上传中 ${p}%（${(e.loaded/1048576).toFixed(0)} / ${(e.total/1048576).toFixed(0)} MB）`;
+  };
+  xhr.onload = () => {
+    btn.disabled = false; bar.style.display = "none";
+    txt.textContent = xhr.status === 200 ? "上传完成，已开始翻译。" : "上传失败：" + xhr.responseText;
+    document.getElementById("form").reset();
+    refresh();
+  };
+  xhr.onerror = () => { btn.disabled = false; txt.textContent = "上传失败，请检查网络后重试。"; };
+  xhr.open("POST", "/api/jobs");
+  xhr.send(fd);
+});
+
+async function act(id, what) {
+  await fetch(`/api/jobs/${id}/${what}`, { method: "POST" });
+  refresh();
+}
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c])); }
+
+async function refresh() {
+  let jobs = [];
+  try { jobs = await (await fetch("/api/jobs")).json(); } catch (e) { return; }
+  document.getElementById("jobs").innerHTML = jobs.map(j => {
+    const pct = j.total_pages ? Math.round(j.done_pages / j.total_pages * 100) : 0;
+    const active = ["queued","running","assembling"].includes(j.state);
+    const failed = (j.failed_pages || []).length;
+    return `<div class="card job">
+      <h3>${esc(j.filename)}</h3>
+      <div class="meta">${LANG[j.target_lang]} · <span class="state-${j.state}">${STATE[j.state] || j.state}</span>
+        · ${j.done_pages}/${j.total_pages || "?"} 页 · 已花费约 $${(j.cost_usd || 0).toFixed(2)}</div>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      ${j.error ? `<div class="warn">${esc(j.error)}</div>` : ""}
+      ${failed && active ? `<div class="warn">${failed} 页暂时失败，完成后可重试</div>` : ""}
+      <div class="actions">
+        ${j.state === "done" ? `<a class="dl" href="/api/jobs/${j.id}/download">下载 PDF</a>` : ""}
+        ${active ? `<button class="secondary" onclick="act('${j.id}','cancel')">取消</button>` : ""}
+        ${(j.state === "failed" || j.state === "cancelled" || (j.state === "done" && failed)) ? `<button class="secondary" onclick="act('${j.id}','retry')">${failed ? "重试失败页" : "继续"}</button>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+health();
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
