@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PDF 说人话</title>
+<meta name="description" content="把 PDF、Word、文本翻译或改写成说人话的版本，排版不变。">
+<meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="说人话">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icon.svg" alt=""><span>PDF 说人话</span></div>
+  <button class="pill" id="keyBtn" type="button">API 密钥</button>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>看不懂的文件，<br>变成说人话的版本。</h1>
+    <p>上传 PDF、Word 或文本文件。Claude 一页一页地翻译、改写成好懂的话，再按原来的排版拼回一个完整的 PDF。</p>
+  </section>
+
+  <section class="card" id="keyCard" hidden>
+    <h2>先填一次 API 密钥</h2>
+    <p class="muted">网站直接从你的浏览器调用 Claude，密钥只保存在这台设备上，不会发给任何别的地方。没有密钥的话，到 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> 创建一个（按用量付费）。</p>
+    <div class="row">
+      <input id="keyInput" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
+      <button class="btn primary" id="keySave" type="button">保存</button>
+    </div>
+    <p class="msg" id="keyMsg"></p>
+  </section>
+
+  <section class="card" id="newCard">
+    <label class="drop" id="drop">
+      <input type="file" id="fileInput" accept=".pdf,.docx,.txt,.md,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+      <div class="drop-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="30" height="30"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <strong>选择文件，或拖到这里</strong>
+      <span class="muted">PDF、Word (.docx)、TXT · 最大 100 MB</span>
+    </label>
+
+    <div class="opts">
+      <label>翻译成
+        <select id="optLang">
+          <option value="zh-Hans">简体中文</option>
+          <option value="zh-Hant">繁體中文</option>
+          <option value="en">English</option>
+          <option value="same">不翻译，只改成说人话</option>
+        </select>
+      </label>
+      <label>风格
+        <select id="optStyle">
+          <option value="plain">说人话（通俗易懂）</option>
+          <option value="faithful">忠实翻译（保留原文风格）</option>
+        </select>
+      </label>
+      <label>模型
+        <select id="optModel">
+          <option value="claude-opus-5-5">Claude Opus 5.5 · 质量最好</option>
+          <option value="claude-sonnet-5-5">Claude Sonnet 5.5 · 更快、更便宜</option>
+        </select>
+      </label>
+      <label>同时处理
+        <select id="optPar">
+          <option value="1">1 页</option>
+          <option value="2">2 页</option>
+          <option value="3" selected>3 页</option>
+          <option value="5">5 页</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="plan" id="plan" hidden></div>
+  </section>
+
+  <section id="jobs"></section>
+
+  <section class="card note">
+    <h3>小提示</h3>
+    <ul>
+      <li>翻译在后台一页一页进行，做完的页会自动保存。关掉网页再打开，可以从断点继续。</li>
+      <li>在 iPad 上处理时请让网页保持在前台、屏幕常亮，切到别的 App 时 Safari 会暂停它。</li>
+      <li>PDF 会保留原来的图片、表格和排版，只把文字换成新的内容。扫描件（图片 PDF）也能处理，文字位置会稍微近似一些。</li>
+      <li>Word 和 TXT 文件没有固定排版，会生成一份整洁的新 PDF。</li>
+    </ul>
+  </section>
+</main>
+
+<div class="viewer" id="viewer" hidden>
+  <div class="viewer-bar">
+    <button class="pill" id="vClose" type="button">关闭</button>
+    <div class="seg" role="tablist">
+      <button type="button" data-v="out" class="on">新版本</button>
+      <button type="button" data-v="src">原文</button>
+    </div>
+    <div class="pager">
+      <button class="pill" id="vPrev" type="button" aria-label="上一页">‹</button>
+      <span id="vNum"></span>
+      <button class="pill" id="vNext" type="button" aria-label="下一页">›</button>
+    </div>
+  </div>
+  <div class="viewer-body"><canvas id="vCanvas"></canvas><p class="muted center" id="vNote"></p></div>
+</div>
+
+<script>setTimeout(function(){if(!window.__pdfplain){var m=document.createElement("p");m.className="card msg err";m.textContent="网页组件没有加载成功，请检查网络后刷新页面。";document.querySelector("main").prepend(m);}},20000);</script>
+<noscript><p class="center">这个网站需要开启 JavaScript。</p></noscript>
+</body>
+</html>
